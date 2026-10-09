@@ -1,0 +1,48 @@
+{
+  "name": "parali-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"tsx watch server/local.ts\" \"vite --host 0.0.0.0\"",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "check:aws": "tsx scripts/check-aws.ts",
+    "build:lambda": "esbuild server/lambda.ts --bundle --platform=node --target=node22 --format=cjs --outfile=infra/build/index.js",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock": "^3.900.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.900.0",
+    "@aws-sdk/client-dynamodb": "^3.900.0",
+    "@aws-sdk/client-polly": "^3.900.0",
+    "@aws-sdk/client-s3": "^3.900.0",
+    "@aws-sdk/client-sts": "^3.900.0",
+    "@aws-sdk/client-transcribe": "^3.900.0",
+    "@aws-sdk/lib-dynamodb": "^3.900.0",
+    "@smithy/core": "^3.35.2",
+    "@smithy/signature-v4": "^5.7.4",
+    "@tailwindcss/vite": "^4.1.0",
+    "dotenv": "^16.4.7",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.1.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.0",
+    "@types/aws-lambda": "^8.10.147",
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.3",
+    "typescript": "~5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "^3.0.5"
+  }
+}
