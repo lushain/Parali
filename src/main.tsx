@@ -1,0 +1,11 @@
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import './styles.css';
+import './refresh.css';
+import './request-flow.css';
+import './buyer-overview.css';
+import './landing.css';
+const App=React.lazy(()=>import('./App'));
+const Landing=React.lazy(()=>import('./Landing'));
+const Page=location.pathname==='/'?Landing:App;
+createRoot(document.getElementById('root')!).render(<React.StrictMode><React.Suspense fallback={<div className="page-boot" aria-label="Loading Parali"/>}><Page/></React.Suspense></React.StrictMode>);
