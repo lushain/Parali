@@ -1,0 +1,22 @@
+import {test,expect} from '@playwright/test';
+import {readFile} from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
+import {emptyDraft,indiaToday,addDays} from '../../shared/domain';
+test('denied geolocation permits an explicit demo fallback; failed image never enables send',async({browser,request})=>{
+ const api='http://localhost:8787/api',key=(await readFile('.local/setup-key','utf8')).trim();
+ const c=await (await request.post(api+'/sessions',{headers:{Authorization:`Bearer ${key}`},data:{}})).json();
+ await request.post(`${api}/sessions/${c.session.id}/action`,{headers:{Authorization:`Bearer ${c.tokens.farmer}`},data:{action:'edit',key:randomUUID(),epoch:1,version:1,draft:{...emptyDraft(),crop:'wheat',area:3,unit:'acre',village:'Kheri',availableDate:indiaToday(),deadline:addDays(indiaToday(),10),access:'truck'}}});
+ const context=await browser.newContext(),p=await context.newPage();
+ await context.addInitScript(()=>{Object.defineProperty(navigator,'geolocation',{value:{getCurrentPosition:(_ok:unknown,fail:(e:unknown)=>void)=>fail({code:1})}});});
+ await p.goto(`/farmer#session=${c.session.id}&token=${c.tokens.farmer}&role=farmer`);
+ await expect(p.locator('.request-panel').getByRole('region',{name:'Field location confirmation'})).toBeVisible();
+ await expect(p.getByRole('heading',{name:'आपके खेत का विवरण',exact:true})).toHaveCount(0);
+ await expect(p.locator('.voice-panel .mic-button')).toBeVisible();await expect(p.locator('dialog[open]')).toHaveCount(0);
+ await p.getByRole('button',{name:'हाँ, लोकेशन की अनुमति दें',exact:true}).click();
+ await expect(p.getByRole('button',{name:'बिना लोकेशन के नक्शा देखें',exact:true})).toBeVisible();await p.route('**/maps/kheri-field-parcel.jpg',route=>route.abort());
+ await p.getByRole('button',{name:'बिना लोकेशन के नक्शा देखें',exact:true}).click();await expect(p.getByRole('button',{name:'हाँ, यही खेत है · Send request',exact:true})).toBeDisabled();
+ let state=await(await request.get(`${api}/sessions/${c.session.id}`,{headers:{Authorization:`Bearer ${c.tokens.farmer}`}})).json();expect(state.request).toBeUndefined();expect(state.locationPreview).toBeUndefined();
+ await p.getByRole('button',{name:'Close field map',exact:true}).click();await p.unroute('**/maps/kheri-field-parcel.jpg');await p.getByRole('button',{name:'नक्शे पर खेत देखें · Locate field',exact:true}).click();await p.getByRole('button',{name:'हाँ, लोकेशन की अनुमति दें',exact:true}).click();await p.getByRole('button',{name:'बिना लोकेशन के नक्शा देखें',exact:true}).click();await expect(p.getByRole('button',{name:'हाँ, यही खेत है · Send request',exact:true})).toBeEnabled({timeout:10000});await p.getByRole('button',{name:'नहीं, वापस जाएँ',exact:true}).click();
+ await expect(p.getByRole('heading',{name:'आपके खेत का विवरण',exact:true})).toBeVisible();
+ state=await(await request.get(`${api}/sessions/${c.session.id}`,{headers:{Authorization:`Bearer ${c.tokens.farmer}`}})).json();expect(state.request).toBeUndefined();await context.close();
+});

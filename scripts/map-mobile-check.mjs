@@ -1,0 +1,30 @@
+import {chromium} from '@playwright/test';import {readFile} from 'node:fs/promises';import {randomUUID} from 'node:crypto';
+const origin='https://demo.d1riy18awh1bmx.amplifyapp.com',api='https://z2egyz8hl6.execute-api.ap-south-1.amazonaws.com/api';
+const setup=(await readFile('.local/setup-key','utf8')).trim();
+const c=await fetch(api+'/sessions',{method:'POST',headers:{Authorization:'Bearer '+setup,'Content-Type':'application/json'},body:'{}'}).then(r=>r.json());
+const r=await fetch(api+'/sessions/'+c.session.id+'/action',{method:'POST',headers:{Authorization:'Bearer '+c.tokens.farmer,'Content-Type':'application/json'},body:JSON.stringify({action:'edit',key:randomUUID(),epoch:1,version:1,draft:{crop:'wheat',area:3,unit:'acre',village:'Kheri',availableDate:'2026-10-12',deadline:'2026-10-20',access:'truck',locationId:null}})});if(!r.ok)throw Error('Could not seed isolated map QA');
+const b=await chromium.launch({channel:'chrome'});
+try{
+ const p=await b.newPage({viewport:{width:1440,height:1100},permissions:['geolocation'],geolocation:{latitude:30.193,longitude:75.875}}),errors=[];p.on('pageerror',e=>errors.push(e.message));
+ if(process.env.LOCAL_BUNDLE)await p.route(origin+'/**',async route=>{const u=new URL(route.request().url());if(u.pathname.startsWith('/assets/')||u.pathname.startsWith('/maps/')||u.pathname.startsWith('/audio/'))await route.fulfill({path:'dist'+u.pathname});else if(u.pathname.startsWith('/farmer'))await route.fulfill({path:'dist/index.html',contentType:'text/html'});else await route.continue();});
+ await p.goto(`${origin}/farmer#session=${c.session.id}&token=${c.tokens.farmer}&role=farmer`);
+ const panel=p.locator('.request-panel'),send=p.getByRole('button',{name:'हाँ, यही खेत है · Send request',exact:true});
+ await panel.getByRole('region',{name:'Field location confirmation'}).waitFor();
+ if(await p.locator('dialog[open]').count())throw Error('Map flow must not open a modal');
+ await p.getByRole('button',{name:'हाँ, लोकेशन की अनुमति दें',exact:true}).click();
+ await p.getByText('Drawing parcel boundary',{exact:true}).waitFor();const presentationStarted=Date.now();await p.screenshot({path:'docs/screenshots/field-boundary-loading.png'});
+ await p.waitForFunction(()=>Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.includes('Send request')&&!b.disabled));
+ await p.getByLabel('Farmer position',{exact:true}).waitFor();if(Date.now()-presentationStarted<4000)throw Error('Map presentation ended too early');const marker=await p.getByLabel('Farmer position',{exact:true}).boundingBox(),frame=await p.locator('.field-map-panel .satellite-frame').boundingBox();if(!marker||!frame)throw Error('Map marker missing');const x=(marker.x+marker.width/2-frame.x)/frame.width,y=(marker.y+marker.height/2-frame.y)/frame.height;if(x<.201||x>.308||y<.43||y>.677)throw Error('Farmer marker is outside the selected parcel');
+ const voice=await p.locator('.voice-panel').boundingBox(),map=await panel.boundingBox();if(!voice||!map||map.x<=voice.x+voice.width)throw Error('Map is not beside the voice panel');
+ await p.screenshot({path:'docs/screenshots/field-map-panel-desktop.png',fullPage:true});await p.locator('.field-map-panel .satellite-frame').screenshot({path:'docs/screenshots/selected-land-parcel.png'});
+ await p.setViewportSize({width:390,height:844});await panel.scrollIntoViewIfNeeded();
+ await p.screenshot({path:'docs/screenshots/field-map-panel-mobile.png',fullPage:true});
+ if(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Horizontal overflow');
+ await p.getByRole('button',{name:'नहीं, वापस जाएँ',exact:true}).click();await p.getByRole('heading',{name:'आपके खेत का विवरण',exact:true}).waitFor();
+ await p.getByRole('button',{name:'नक्शे पर खेत देखें · Locate field',exact:true}).click();await p.getByRole('button',{name:'हाँ, लोकेशन की अनुमति दें',exact:true}).click();await p.waitForFunction(()=>Array.from(document.querySelectorAll('button')).some(b=>b.textContent?.includes('Send request')&&!b.disabled));
+ await send.click();await p.getByRole('heading',{name:'आपका अनुरोध भेज रहे हैं…',exact:true}).waitFor();await p.screenshot({path:'docs/screenshots/request-sending-mobile.png'});await p.getByText('आपका अनुरोध पहुँच गया है',{exact:true}).waitFor();await p.getByRole('heading',{name:'आपके खेत का विवरण',exact:true}).waitFor();
+ await p.getByRole('heading',{name:'Vyom Bhatnagar',exact:true}).waitFor();await p.getByText('20 वर्ष · Age 20',{exact:true}).waitFor();if(!new URL(p.url()).pathname.startsWith('/farmer/request/'))throw Error('Full request page route missing');
+ await p.screenshot({path:'docs/screenshots/request-details-mobile.png',fullPage:true});if(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Request page overflows phone');await p.reload();await p.getByRole('heading',{name:'Vyom Bhatnagar',exact:true}).waitFor();await p.setViewportSize({width:1440,height:1100});await p.screenshot({path:'docs/screenshots/request-details-desktop.png',fullPage:true});
+ if(await p.locator('main').innerText().then(t=>/\bdemo\b|डेमो/i.test(t)))throw Error('Prominent demo label remains on the request page');
+ if(errors.length)throw Error(errors.join(';'));console.log('Map and full request page passed at desktop and 390px: conversation visible, no modal, cancellation restores details, confirmation sends, no overflow or browser errors.');
+}finally{await b.close();}

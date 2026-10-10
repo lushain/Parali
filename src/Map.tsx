@@ -1,0 +1,16 @@
+import { locations, seeds, type Draft } from '../shared/domain';
+export default function FieldMap({draft,onSelect}:{draft?:Draft;onSelect?:(id:Draft['locationId'])=>void}){
+  const point=locations.find(l=>l.id===draft?.locationId);
+  return <div className="field-map"><svg viewBox="0 0 800 470" role="img" aria-label="Schematic supply map near Sangrur. Not navigation or a surveyed farm location.">
+    <defs><pattern id="fields" width="136" height="94" patternUnits="userSpaceOnUse" patternTransform="rotate(-16)"><rect width="136" height="94" fill="#e6e7cf"/><rect x="4" y="4" width="77" height="42" rx="4" fill="#d5ddbd"/><rect x="86" y="4" width="46" height="86" rx="3" fill="#dfe2c8"/><rect x="4" y="51" width="77" height="39" rx="4" fill="#ece3ba"/><path d="M0 48H136M83 0V94" stroke="#f9f6e9" strokeWidth="4"/></pattern><filter id="shadow"><feDropShadow dx="0" dy="3" stdDeviation="3" floodOpacity=".15"/></filter></defs>
+    <rect width="800" height="470" fill="url(#fields)"/>
+    <path d="M-40 350C140 230 145 90 280 20S450 160 830 80" stroke="#a6c9c1" strokeWidth="22" fill="none"/><path d="M-40 350C140 230 145 90 280 20S450 160 830 80" stroke="#c3dfd6" strokeWidth="12" fill="none"/>
+    <path d="M-20 180L215 210 415 225 810 340M415 225L470 -20M415 225L320 500" stroke="#c1bda6" strokeWidth="13" fill="none"/><path d="M-20 180L215 210 415 225 810 340M415 225L470 -20M415 225L320 500" stroke="#fffdf1" strokeWidth="9" fill="none"/>
+    <path d="M200 210L300 130 610 150M320 465L200 390 180 260M420 245L540 410 760 415" stroke="#faf7e9" strokeWidth="5" fill="none"/>
+    <text x="310" y="208" className="map-town">SANGRUR</text><text x="585" y="125" className="map-town small">BHAWANIGARH</text><text x="300" y="396" className="map-town small">SUNAM</text><text x="64" y="61" className="map-area">PUNJAB</text>
+    <path d={`M${point?point.x*8:392} ${point?point.y*4.7:202} Q350 320 604 365`} fill="none" stroke="#71866c" strokeWidth="3" strokeDasharray="7 7"/>
+    <g transform="translate(604 365)"><rect x="-20" y="-20" width="40" height="40" rx="12" fill="#294d3c"/><path d="M-10 10V-5L0 0V-8L10 -2V10ZM-5 4H-2M3 4H6" stroke="#fff" fill="none" strokeWidth="2"/><text x="0" y="39" textAnchor="middle" className="map-label">Biomass collection plant</text></g>
+    {seeds.map(s=><g key={s.id} transform={`translate(${s.x*8} ${s.y*4.7})`}><circle r="16" fill={s.crop==='paddy'?'#fffef7':'#e9e7df'} stroke="#85986e" strokeWidth="2"/><text y="4" textAnchor="middle" className="map-number">{s.tonnes}</text></g>)}
+    {point&&<g transform={`translate(${point.x*8} ${point.y*4.7})`} filter="url(#shadow)"><circle r="30" fill="#b68c2f" opacity=".16"/><path d="M0 25C-32 -4 -18 -25 0 -25S32 -4 0 25" fill="#bb7a35"/><circle cy="-7" r="7" fill="#fff7dc"/><rect x="-70" y="-58" width="140" height="25" rx="6" fill="#fffdf4"/><text y="-41" textAnchor="middle" className="map-label">Your farmer’s request</text></g>}
+  </svg><span className="map-corner">Schematic map · synthetic locations</span><span className="map-north">N ↑</span>{onSelect&&<div className="pin-select">{locations.map(l=><button type="button" className={draft?.locationId===l.id?'selected':''} key={l.id} onClick={()=>onSelect(l.id)}>{l.name}</button>)}</div>}</div>;
+}
