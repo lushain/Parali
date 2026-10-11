@@ -1,0 +1,290 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Parali hackathon demo - session isolation and protected AWS Hindi voice
+Parameters:
+  VoiceBackend:
+    Type: String
+    Default: sonic
+    AllowedValues: [sonic, transcribe]
+  SonicRegion:
+    Type: String
+    Default: ap-northeast-1
+    AllowedValues: [ap-northeast-1, us-east-1, us-west-2, eu-north-1]
+  SonicModelId:
+    Type: String
+    Default: amazon.nova-2-5-sonic
+    AllowedValues: [amazon.nova-2-5-sonic]
+  LlmBackend:
+    Type: String
+    Default: bedrock
+    AllowedValues: [bedrock, ec2]
+  ComputeVpc:
+    Type: String
+    Default: ''
+    Description: Your VPC ID, required only when LlmBackend is ec2.
+  ComputeSubnet:
+    Type: String
+    Default: ''
+    Description: Public subnet in the selected VPC, for outbound downloads; no inbound access is granted.
+  ComputeImage:
+    Type: AWS::EC2::Image::Id
+    Default: ami-08e3b3155fc937a94
+    Description: Verified Mumbai Amazon Linux 2023 x86 AMI. Reverify before reuse.
+  WorkerMinutes:
+    Type: Number
+    Default: 60
+    AllowedValues: [30, 60, 120, 180]
+    Description: Worker stops itself after this many minutes on each boot. Storage remains billable.
+  OrganizerKey:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Server-only maintenance credential. Not a product role or a key users must enter.
+  FrontendOrigin:
+    Type: String
+    AllowedPattern: 'https://[a-zA-Z0-9.-]+'
+    Description: Exact Amplify HTTPS origin, without a trailing slash
+  ModelId:
+    Type: String
+    Default: qwen.qwen3-32b-v1:0
+    AllowedPattern: '[a-z0-9][a-z0-9.:-]+'
+    Description: Verify in-region Converse access before deploying. Cross-region profiles are intentionally not granted.
+  PollyVoice:
+    Type: String
+    Default: Kajal
+    AllowedValues: [Aditi, Kajal]
+  PollyEngine:
+    Type: String
+    Default: neural
+    AllowedValues: [standard, neural]
+  DemoEndsAt:
+    Type: String
+    Description: Voice model permission expires at this UTC time. Does not shut down the farmer or buyer pages.
+Conditions:
+  UseCompute: !Equals [!Ref LlmBackend, ec2]
+  UseBedrock: !Equals [!Ref LlmBackend, bedrock]
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    Timeout: 28
+    MemorySize: 512
+    Environment:
+      Variables:
+        AI_PROVIDER: aws
+        LLM_BACKEND: !Ref LlmBackend
+        SESSION_TABLE: !Ref Sessions
+        AUDIO_BUCKET: !Ref AudioBucket
+        BEDROCK_MODEL_ID: !Ref ModelId
+        POLLY_VOICE: !Ref PollyVoice
+        POLLY_ENGINE: !Ref PollyEngine
+        PLATFORM_SETUP_KEY: !Ref OrganizerKey
+        VOICE_BACKEND: !Ref VoiceBackend
+        SONIC_REGION: !Ref SonicRegion
+        SONIC_MODEL_ID: !Ref SonicModelId
+        SONIC_ROLE_ARN: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-sonic-client'
+Resources:
+  Sessions:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: id, AttributeType: S}]
+      KeySchema: [{AttributeName: id, KeyType: HASH}]
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+      SSESpecification: {SSEEnabled: true}
+      Tags: [{Key: Project, Value: parali-demo}]
+  AudioBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      OwnershipControls: {Rules: [{ObjectOwnership: BucketOwnerEnforced}]}
+      BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]}
+      LifecycleConfiguration:
+        Rules: [{Id: ExpireTemporaryAudio, Status: Enabled, ExpirationInDays: 1, AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}}]
+      Tags: [{Key: Project, Value: parali-demo}]
+  AudioBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AudioBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt AudioBucket.Arn, !Sub '${AudioBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': false}}
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      CorsConfiguration:
+        AllowOrigins: [!Ref FrontendOrigin]
+        AllowHeaders: [Content-Type, Authorization]
+        AllowMethods: [GET, POST, OPTIONS]
+        MaxAge: 300
+      DefaultRouteSettings: {ThrottlingBurstLimit: 10, ThrottlingRateLimit: 5}
+      Tags: {Project: parali-demo}
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: build/
+      Handler: index.handler
+      # This new account has a regional quota of 10, below AWS's 100-unreserved
+      # requirement for setting reserved concurrency. API/application limits apply.
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-sonic-client'
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:Scan]
+              Resource: !GetAtt Sessions.Arn
+            - Effect: Allow
+              Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+              Resource: [!Sub '${AudioBucket.Arn}/audio/*', !Sub '${AudioBucket.Arn}/llm/*']
+            - Effect: Allow
+              Action: [s3:ListBucket]
+              Resource: !GetAtt AudioBucket.Arn
+            - Effect: Allow
+              Action: [transcribe:StartTranscriptionJob, transcribe:GetTranscriptionJob, transcribe:DeleteTranscriptionJob]
+              Resource: !Sub 'arn:${AWS::Partition}:transcribe:${AWS::Region}:${AWS::AccountId}:transcription-job/parali-*'
+            - Effect: Allow
+              Action: [transcribe:ListTranscriptionJobs, polly:DescribeVoices, polly:SynthesizeSpeech]
+              Resource: '*'
+            - Effect: Allow
+              Action: transcribe:StartStreamTranscriptionWebSocket
+              Resource: '*'
+              Condition: {StringEquals: {'aws:RequestedRegion': !Ref AWS::Region}}
+            - !If
+              - UseBedrock
+              - Effect: Allow
+                Action: [bedrock:InvokeModel, bedrock:GetFoundationModel]
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${ModelId}'
+              - !Ref AWS::NoValue
+      Events:
+        Api: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/api/{proxy+}', Method: ANY}}
+        Cleanup:
+          Type: Schedule
+          Properties: {Schedule: 'rate(1 hour)', Input: '{"operation":"cleanup"}', Description: Remove abandoned transcription jobs and temporary media}
+      Tags: {Project: parali-demo}
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ApiFunction}'
+      RetentionInDays: 3
+  SonicClientRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-sonic-client'
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {AWS: !GetAtt ApiFunctionRole.Arn}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: OneSonicModelOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock:${SonicRegion}::foundation-model/${SonicModelId}'
+                Condition:
+                  StringEquals: {'aws:RequestedRegion': !Ref SonicRegion}
+                  DateLessThan: {'aws:CurrentTime': !Ref DemoEndsAt}
+  ComputeRole:
+    Type: AWS::IAM::Role
+    Condition: UseCompute
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: ec2.amazonaws.com}, Action: 'sts:AssumeRole'}]
+      Policies:
+        - PolicyName: ParaliPrivateModelMailbox
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt AudioBucket.Arn
+                Condition: {StringLike: {'s3:prefix': 'llm/requests/*'}}
+              - Effect: Allow
+                Action: [s3:GetObject, s3:DeleteObject]
+                Resource: !Sub '${AudioBucket.Arn}/llm/requests/*'
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: [!Sub '${AudioBucket.Arn}/llm/results/*', !Sub '${AudioBucket.Arn}/llm/status/worker.json']
+  ComputeProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: UseCompute
+    Properties: {Roles: [!Ref ComputeRole]}
+  ComputeFirewall:
+    Type: AWS::EC2::SecurityGroup
+    Condition: UseCompute
+    Properties:
+      GroupDescription: Parali model worker - no inbound access
+      VpcId: !Ref ComputeVpc
+      SecurityGroupIngress: []
+      SecurityGroupEgress: [{IpProtocol: '-1', CidrIp: 0.0.0.0/0}]
+      Tags: [{Key: Project, Value: parali-demo}]
+  ComputeWorker:
+    Type: AWS::EC2::Instance
+    Condition: UseCompute
+    Properties:
+      ImageId: !Ref ComputeImage
+      InstanceType: c5a.2xlarge
+      IamInstanceProfile: !Ref ComputeProfile
+      InstanceInitiatedShutdownBehavior: stop
+      MetadataOptions: {HttpTokens: required, HttpEndpoint: enabled, HttpPutResponseHopLimit: 1}
+      NetworkInterfaces: [{DeviceIndex: '0', AssociatePublicIpAddress: true, SubnetId: !Ref ComputeSubnet, GroupSet: [!Ref ComputeFirewall]}]
+      BlockDeviceMappings: [{DeviceName: /dev/xvda, Ebs: {Encrypted: true, VolumeSize: 24, VolumeType: gp3, DeleteOnTermination: true}}]
+      Tags: [{Key: Name, Value: parali-qwen-worker}, {Key: Project, Value: parali-demo}]
+      UserData:
+        Fn::Base64: !Sub |
+          #cloud-boothook
+          #!/bin/bash
+          shutdown -h +${WorkerMinutes}
+          cat > /opt/start-parali.sh <<'START'
+          #!/bin/bash
+          set -euo pipefail
+          exec > >(tee -a /var/log/parali-worker-startup.log /dev/console) 2>&1
+          trap 'shutdown -h now' EXIT
+          export AWS_DEFAULT_REGION=${AWS::Region}
+          export AUDIO_BUCKET=${AudioBucket}
+          export WORKER_END_EPOCH=$(($(date +%s) + ${WorkerMinutes} * 60 - 60))
+          export OLLAMA_HOST=127.0.0.1:11434
+          export OLLAMA_NUM_PARALLEL=1
+          # Do not race cloud-init's root partition/filesystem expansion.
+          for i in $(seq 1 90); do
+            if [ "$(df -Pk / | awk 'NR==2 {print $2}')" -ge 20000000 ]; then break; fi
+            sleep 2
+          done
+          [ "$(df -Pk / | awk 'NR==2 {print $2}')" -ge 20000000 ]
+          dnf install -y zstd tar python3-pip
+          if ! command -v ollama >/dev/null; then
+            curl --fail --location --retry 2 --max-time 600 https://ollama.com/download/ollama-linux-amd64.tar.zst -o /tmp/parali-ollama.tar.zst
+            tar --zstd -xf /tmp/parali-ollama.tar.zst -C /usr
+          fi
+          python3 -m venv /opt/parali-python
+          /opt/parali-python/bin/pip install boto3
+          echo '__PARALI_WORKER_BASE64__' | base64 --decode > /opt/parali-worker.py
+          ollama serve >/var/log/parali-ollama.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl --silent --fail http://127.0.0.1:11434/api/version; then break; fi
+            sleep 2
+          done
+          ollama pull qwen3:8b >/var/log/parali-model-pull.log 2>&1
+          /opt/parali-python/bin/python /opt/parali-worker.py
+          START
+          # Close inherited cloud-init pipes so its remaining modules can run.
+          nohup runuser -l root -c '/bin/bash /opt/start-parali.sh' >/var/log/parali-launch.log 2>&1 </dev/null &
+Outputs:
+  ApiUrl: {Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'}
+  SessionTable: {Value: !Ref Sessions}
+  AudioBucketName: {Value: !Ref AudioBucket}
+  LambdaName: {Value: !Ref ApiFunction}
+  ComputeInstance: {Condition: UseCompute, Value: !Ref ComputeWorker}

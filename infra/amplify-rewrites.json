@@ -1,0 +1,5 @@
+[
+  {"source":"/farmer/request/<*>","target":"/index.html","status":"200"},
+  {"source":"/farmer","target":"/index.html","status":"200"},
+  {"source":"/buyer","target":"/index.html","status":"200"}
+]
